@@ -49,7 +49,7 @@ export default (routeConfigs, stackConfig = {}) => {
   const initialRouteName = stackConfig.initialRouteName || routeNames[0];
 
   const initialChildRouter = childRouters[initialRouteName];
-  const pathsByRouteNames = { ...stackConfig.paths } || {};
+  const pathsByRouteNames = { ...stackConfig.paths };
   let paths = [];
 
   function getInitialState(action) {
@@ -547,9 +547,8 @@ export default (routeConfigs, stackConfig = {}) => {
         return null;
       }
 
-      let matchedRouteConfig = routeConfigs[matchedRouteName];
-
-      // reduce the items of the query string. any query params may
+      // reduce the items of the query string. parent params are
+      // may be overridden by query params. query params may
       // be overridden by path params
       const queryParams = !isEmpty(inputParams)
         ? inputParams
@@ -561,7 +560,7 @@ export default (routeConfigs, stackConfig = {}) => {
               return nextResult;
             }
             return result;
-          }, null);
+          }, inputParams);
 
       // reduce the matched pieces of the path into the params
       // of the route. `params` is null if there are no params.
@@ -591,13 +590,9 @@ export default (routeConfigs, stackConfig = {}) => {
       let nestedAction;
       let nestedQueryString = queryString ? '?' + queryString : '';
       if (childRouters[matchedRouteName]) {
-        let passedParams = (matchedRouteConfig.passParams || []).reduce(
-          (o, param) => (o[param] = params[param]),
-          {}
-        )
         nestedAction = childRouters[matchedRouteName].getActionForPathAndParams(
           pathMatch.slice(pathMatchKeys.length).join('/') + nestedQueryString,
-          passedParams
+          params
         );
         if (!nestedAction) {
           return null;

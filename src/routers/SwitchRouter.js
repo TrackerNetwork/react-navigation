@@ -1,3 +1,5 @@
+import pathToRegexp from 'path-to-regexp';
+
 import invariant from '../utils/invariant';
 import getScreenForRouteName from './getScreenForRouteName';
 import createConfigGetter from './createConfigGetter';
@@ -6,6 +8,14 @@ import NavigationActions from '../NavigationActions';
 import StackActions from './StackActions';
 import validateRouteConfigMap from './validateRouteConfigMap';
 import getNavigationActionCreators from './getNavigationActionCreators';
+
+function isEmpty(obj) {
+  if (!obj) return true;
+  for (let key in obj) {
+    return false;
+  }
+  return true;
+}
 
 function childrenUpdateWithoutSwitchingIndex(actionType) {
   return [
@@ -20,7 +30,8 @@ export default (routeConfigs, config = {}) => {
   validateRouteConfigMap(routeConfigs);
 
   const order = config.order || Object.keys(routeConfigs);
-  const paths = config.paths || {};
+  const pathsByRouteNames = { ...config.paths };
+  const paths = [];
   const initialRouteParams = config.initialRouteParams;
   const initialRouteName = config.initialRouteName || order[0];
   const backBehavior = config.backBehavior || 'none';
@@ -32,16 +43,43 @@ export default (routeConfigs, config = {}) => {
   const childRouters = {};
   order.forEach(routeName => {
     const routeConfig = routeConfigs[routeName];
-    if (!paths[routeName]) {
-      paths[routeName] =
+    if (!pathsByRouteNames[routeName]) {
+      pathsByRouteNames[routeName] =
         typeof routeConfig.path === 'string' ? routeConfig.path : routeName;
     }
+    let pathPattern = pathsByRouteNames[routeName];
+
     childRouters[routeName] = null;
     const screen = getScreenForRouteName(routeConfigs, routeName);
     if (screen.router) {
       childRouters[routeName] = screen.router;
     }
+
+    let matchExact = !!pathPattern && !childRouters[routeName];
+
+    const keys = [];
+    let re, toPath, priority;
+    if (typeof pathPattern === 'string') {
+      // pathPattern may be either a string or a regexp object according to path-to-regexp docs.
+      re = pathToRegexp(pathPattern, keys);
+      toPath = pathToRegexp.compile(pathPattern);
+      priority = 0;
+    } else {
+      // for wildcard match
+      re = pathToRegexp('*', keys);
+      toPath = () => '';
+      matchExact = true;
+      priority = -1;
+    }
+    if (!matchExact) {
+      const wildcardRe = pathToRegexp(`${pathPattern}/*`, keys);
+      re = new RegExp(`(?:${re.source})|(?:${wildcardRe.source})`);
+    }
+
+    pathsByRouteNames[routeName] = { re, keys, toPath, priority };
+    paths.push([routeName, pathsByRouteNames[routeName]]);
   });
+
   if (initialRouteIndex === -1) {
     throw new Error(
       `Invalid initialRouteName '${initialRouteName}'.` +
@@ -110,24 +148,22 @@ export default (routeConfigs, config = {}) => {
       let state = inputState || this.getInitialState();
       let activeChildIndex = state.index;
 
-      if (action.type === NavigationActions.INIT) {
-        // NOTE(brentvatne): this seems weird... why are we merging these
-        // params into child routes?
-        // ---------------------------------------------------------------
-        // Merge any params from the action into all the child routes
-        const { params } = action;
-        if (params) {
-          state.routes = state.routes.map(route => ({
-            ...route,
-            params: {
-              ...route.params,
-              ...params,
-              ...(route.routeName === initialRouteName
-                ? initialRouteParams
-                : null),
-            },
-          }));
-        }
+      // NOTE(brentvatne): this seems weird... why are we merging these
+      // params into child routes?
+      // ---------------------------------------------------------------
+      // Merge any params from the action into all the child routes
+      const { params } = action;
+      if (params) {
+        state.routes = state.routes.map(route => ({
+          ...route,
+          params: {
+            ...route.params,
+            ...params,
+            ...(route.routeName === initialRouteName
+              ? initialRouteParams
+              : null),
+          },
+        }));
       }
 
       // Let the current child handle it
@@ -303,9 +339,9 @@ export default (routeConfigs, config = {}) => {
 
     getPathAndParamsForState(state) {
       const route = state.routes[state.index];
-      const routeName = order[state.index];
-      const subPath = paths[routeName];
+      const routeName = route.routeName;
       const screen = getScreenForRouteName(routeConfigs, routeName);
+      const subPath = pathsByRouteNames[routeName].toPath(route.params);
       let path = subPath;
       let params = route.params;
       if (screen && screen.router) {
@@ -327,54 +363,104 @@ export default (routeConfigs, config = {}) => {
      *
      * This will return null if there is no action matched
      */
-    getActionForPathAndParams(path, params) {
-      if (!path) {
+    getActionForPathAndParams(pathToResolve, inputParams) {
+      // If the path is empty (null or empty string)
+      // just return the initial route action
+      if (!pathToResolve) {
         return NavigationActions.navigate({
           routeName: initialRouteName,
-          params,
+          params: inputParams,
         });
       }
-      return (
-        order
-          .map(childId => {
-            const parts = path.split('/');
-            const pathToTest = paths[childId];
-            const partsInTestPath = pathToTest.split('/').length;
-            const pathPartsToTest = parts.slice(0, partsInTestPath).join('/');
-            if (pathPartsToTest === pathToTest) {
-              const childRouter = childRouters[childId];
-              const action = NavigationActions.navigate({
-                routeName: childId,
-              });
-              if (childRouter && childRouter.getActionForPathAndParams) {
-                let childRouteConfig = routeConfigs[childId];
-                let passedParams = (childRouteConfig.passParams || []).reduce(
-                  (o, param) => (o[param] = params[param]),
-                  {}
-                )
-                action.action = childRouter.getActionForPathAndParams(
-                  parts.slice(partsInTestPath).join('/'),
-                  passedParams
-                );
-              }
-              if (params) {
-                action.params = params;
-              }
-              return action;
+
+      const [pathNameToResolve, queryString] = pathToResolve.split('?');
+
+      // Attempt to match `pathNameToResolve` with a route in this router's
+      // routeConfigs
+      let matchedRouteName;
+      let pathMatch;
+      let pathMatchKeys;
+
+      // eslint-disable-next-line no-restricted-syntax
+      for (const [routeName, path] of paths) {
+        const { re, keys } = path;
+        pathMatch = re.exec(pathNameToResolve);
+        if (pathMatch && pathMatch.length) {
+          pathMatchKeys = keys;
+          matchedRouteName = routeName;
+          break;
+        }
+      }
+
+      // We didn't match -- return null
+      if (!matchedRouteName) {
+        // If the path is empty (null or empty string)
+        // just return the initial route action
+        if (!pathToResolve) {
+          return NavigationActions.navigate({
+            routeName: initialRouteName,
+          });
+        }
+        return null;
+      }
+
+      // reduce the items of the query string. parent params are
+      // may be overridden by query params. query params may
+      // be overridden by path params
+      const queryParams = !isEmpty(inputParams)
+        ? inputParams
+        : (queryString || '').split('&').reduce((result, item) => {
+            if (item !== '') {
+              const nextResult = result || {};
+              const [key, value] = item.split('=');
+              nextResult[key] = value;
+              return nextResult;
             }
-            return null;
-          })
-          .find(action => !!action) ||
-        order
-          .map(childId => {
-            const childRouter = childRouters[childId];
-            return (
-              childRouter && childRouter.getActionForPathAndParams(path, params)
-            );
-          })
-          .find(action => !!action) ||
-        null
-      );
+            return result;
+          }, inputParams);
+
+      // reduce the matched pieces of the path into the params
+      // of the route. `params` is null if there are no params.
+      const params = pathMatch.slice(1).reduce((result, matchResult, i) => {
+        const key = pathMatchKeys[i];
+        if (key.asterisk || !key) {
+          return result;
+        }
+        const nextResult = result || inputParams || {};
+        const paramName = key.name;
+
+        let decodedMatchResult;
+        try {
+          decodedMatchResult = decodeURIComponent(matchResult);
+        } catch (e) {
+          // ignore `URIError: malformed URI`
+        }
+
+        nextResult[paramName] = decodedMatchResult || matchResult;
+        return nextResult;
+      }, queryParams);
+
+      // Determine nested actions:
+      // If our matched route for this router is a child router,
+      // get the action for the path AFTER the matched path for this
+      // router
+      let nestedAction;
+      let nestedQueryString = queryString ? '?' + queryString : '';
+      if (childRouters[matchedRouteName]) {
+        nestedAction = childRouters[matchedRouteName].getActionForPathAndParams(
+          pathMatch.slice(pathMatchKeys.length).join('/') + nestedQueryString,
+          params
+        );
+        if (!nestedAction) {
+          return null;
+        }
+      }
+
+      return NavigationActions.navigate({
+        routeName: matchedRouteName,
+        ...(params ? { params } : {}),
+        ...(nestedAction ? { action: nestedAction } : {}),
+      });
     },
 
     getScreenOptions: createConfigGetter(

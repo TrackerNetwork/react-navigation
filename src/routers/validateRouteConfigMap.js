@@ -42,13 +42,6 @@ function validateRouteConfigMap(routeConfigs) {
           'a getScreen, not both.'
       );
     }
-
-    if (routeConfig.passParams && !Array.isArray(routeConfig.passParams)) {
-      throw new Error(
-        `Route config for route '${routeName}' declares ` +
-        'passParams but it is not an array.'
-      );
-    }
   });
 }
 
