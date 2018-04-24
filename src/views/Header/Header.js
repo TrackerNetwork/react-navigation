@@ -47,12 +47,6 @@ class Header extends React.PureComponent {
     widths: {},
   };
 
-  _handleOnLayout = e => {
-    if (typeof this.props.onLayout === 'function') {
-      this.props.onLayout(e.nativeEvent.layout);
-    }
-  };
-
   _getHeaderTitleString(scene) {
     const options = scene.descriptor.options;
     if (typeof options.headerTitle === 'string') {
@@ -172,7 +166,7 @@ class Header extends React.PureComponent {
     ButtonContainerComponent,
     LabelContainerComponent
   ) => {
-    const { options } = props.scene.descriptor;
+    const { options, navigation } = props.scene.descriptor;
     const backButtonTitle = this._getBackButtonTitleString(props.scene);
     const truncatedBackButtonTitle = this._getTruncatedBackButtonTitle(
       props.scene
@@ -184,7 +178,7 @@ class Header extends React.PureComponent {
     const goBack = () => {
       // Go back on next tick because button ripple effect needs to happen on Android
       requestAnimationFrame(() => {
-        this.props.navigation.goBack(props.scene.descriptor.key);
+        navigation.goBack(props.scene.descriptor.key);
       });
     };
 
@@ -494,10 +488,7 @@ class Header extends React.PureComponent {
     const forceInset = headerForceInset || { top: 'always', bottom: 'never' };
 
     return (
-      <Animated.View
-        style={this.props.layoutInterpolator(this.props)}
-        onLayout={this._handleOnLayout}
-      >
+      <Animated.View style={this.props.layoutInterpolator(this.props)}>
         <SafeAreaView forceInset={forceInset} style={containerStyles}>
           <View style={StyleSheet.absoluteFill}>
             {options.headerBackground}

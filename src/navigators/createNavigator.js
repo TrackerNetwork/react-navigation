@@ -25,7 +25,7 @@ function createNavigator(NavigatorView, router, navigationConfig) {
       Object.values(this.childEventSubscribers).map(s => s.removeAll());
     }
 
-    _isRouteFocused = route => () => {
+    _isRouteFocused = route => {
       const { state } = this.props.navigation;
       const focusedRoute = state.routes[state.index];
       return route === focusedRoute;
@@ -95,6 +95,7 @@ function createNavigator(NavigatorView, router, navigationConfig) {
 
       return (
         <NavigatorView
+          {...this.props}
           screenProps={screenProps}
           navigation={navigation}
           navigationConfig={navigationConfig}
